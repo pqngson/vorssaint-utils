@@ -159,6 +159,22 @@ struct AgentLiveSession: Equatable, Identifiable {
     var tokens: AgentTokens
     var cost: Double
     var needsApproval: Bool = false
+
+    var isAgyCli: Bool {
+        id.contains("antigravity-cli")
+    }
+
+    var providerIdentifier: String {
+        if provider == .agy && isAgyCli {
+            return "agy"
+        }
+        return provider.displayName
+    }
+
+    var displayProject: String {
+        if !project.isEmpty { return project }
+        return providerIdentifier
+    }
 }
 
 /// Something worth a moment in the closed island.

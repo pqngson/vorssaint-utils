@@ -568,7 +568,13 @@ final class AgentUsageService: ObservableObject {
         }
         if enabled.contains(.agy) {
             let agyDirs = AgentAgyConversationReader.directories(home: home)
-            if rescan || paths.contains(where: { path in agyDirs.contains(where: { path.hasPrefix($0) }) }) {
+            let agyRoots = watchedRoots.filter { $0.provider == .agy }
+            let triggersScan = rescan || paths.contains { path in
+                agyDirs.contains(where: { path.hasPrefix($0) })
+                    || agyRoots.contains(where: { path.hasPrefix($0.url.path) })
+                    || (path.contains("/.gemini/antigravity") && path.contains("/brain/"))
+            }
+            if triggersScan {
                 if agyConversationReader.scan(into: store, since: Date().addingTimeInterval(-Self.horizon), home: home,
                                               shouldContinue: { !(self.readerCancellation?.isCancelled ?? true) }) {
                     changed = true

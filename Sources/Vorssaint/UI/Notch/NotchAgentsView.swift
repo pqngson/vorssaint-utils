@@ -783,7 +783,7 @@ private struct NotchAgentLiveCard: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 NotchAgentGlyph(provider: session.provider, size: 9)
-                Text(session.project.isEmpty ? session.provider.displayName : session.project)
+                Text(session.displayProject)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)

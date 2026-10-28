@@ -755,6 +755,9 @@ final class AgentLogCursor {
         let session = AgentLogCursor.session(of: path, provider: provider, roots: roots)
         self.session = session
         state.session = session
+        if path.contains("antigravity-cli") {
+            state.parentSession = "antigravity-cli"
+        }
     }
 
     static func session(of path: String, provider: AgentProvider, roots: [AgentLogRoot]? = nil) -> String {
@@ -824,6 +827,9 @@ final class AgentLogCursor {
         pending = Data()
         discarding = false
         state = AgentLogState(session: session)
+        if path.contains("antigravity-cli") {
+            state.parentSession = "antigravity-cli"
+        }
         fingerprinted = nil
         codexParentSearch = -1
     }
@@ -868,6 +874,9 @@ final class AgentLogCursor {
         discarding = saved.discarding
         modified = saved.modified
         state = saved.state
+        if saved.path.contains("antigravity-cli") {
+            state.parentSession = "antigravity-cli"
+        }
         fingerprinted = (saved.offset, saved.identity, saved.fingerprint)
     }
 

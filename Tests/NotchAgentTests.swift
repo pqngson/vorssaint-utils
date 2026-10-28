@@ -665,7 +665,7 @@ enum NotchAgentTests {
                      "unmeasured usage preserves cost and tokens as unavailable")
         suite.expect(store.records.allSatisfy { $0.project == "cool-app" },
                      "the workspace named in the message outranks the folders of files and commands")
-        suite.expect(state.model.isEmpty, "tool output never sets the model")
+        suite.expect(state.model == "gemini-3.8-flash", "model falls back to gemini-3.8-flash and tool output never sets the model")
         suite.expect(AgentLogParser.parseAntigravity(toolResult, state: &state, now: now).isEmpty,
                      "a generic step outside a turn says nothing")
 
@@ -676,7 +676,7 @@ enum NotchAgentTests {
         let command = line(#"{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-28T00:00:02.000Z","tool_calls":[{"tool_name":"run_command","args":{"Cwd":"/Users/me/app"}}]}"#)
         _ = AgentLogParser.parseAntigravity(bare, state: &folderState, now: now)
         _ = AgentLogParser.parseAntigravity(fileOnly, state: &folderState, now: now)
-        suite.expect(folderState.project.isEmpty, "a file's folder never becomes the project")
+        suite.expect(folderState.project == "app", "a file's folder infers the project when no workspace is known")
         _ = AgentLogParser.parseAntigravity(command, state: &folderState, now: now)
         suite.expect(folderState.project == "app", "a command's working folder names the project while no workspace is known")
         _ = AgentLogParser.parseAntigravity(userPrompt, state: &folderState, now: now)
