@@ -27,6 +27,15 @@ extension AgentProvider {
         case .codex: CodexReader()
         case .opencode: OpenCodeReader()
         case .copilot: CopilotReader()
+        case .agy: AgyReader()
         }
+    }
+}
+
+struct AntigravityReader: AgentHarnessReader {
+    var provider: AgentProvider { .agy }
+
+    func parse(_ line: Data, state: inout AgentLogState, now: Date) -> [AgentLogEntry] {
+        AgentLogParser.parseAntigravity(line, state: &state, now: now)
     }
 }

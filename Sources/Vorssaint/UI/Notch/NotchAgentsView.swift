@@ -18,6 +18,8 @@ struct NotchAgentsView: View {
     @AppStorage(DefaultsKey.notchAgentsCodex) private var codex = true
     @AppStorage(DefaultsKey.notchAgentsOpenCode) private var opencode = true
     @AppStorage(DefaultsKey.notchAgentsCopilot) private var copilot = true
+    @AppStorage(DefaultsKey.notchAgentsAgy) private var agy = true
+    @AppStorage(DefaultsKey.notchAgentsAgyWindowFilter) private var agyFilter = "all"
 
     private var text: NotchAgentStrings { FeatureStrings.notchAgents(l10n.language) }
     private var chosenPeriod: AgentPeriod { AgentPeriod(rawValue: period) ?? .today }
@@ -32,7 +34,7 @@ struct NotchAgentsView: View {
     /// Only agents that left something on this Mac, or whose accounts were
     /// added, get cards.
     private var providers: [AgentProvider] {
-        [claude ? AgentProvider.claude : nil, codex ? .codex : nil, opencode ? .opencode : nil, copilot ? .copilot : nil].compactMap { $0 }
+        [claude ? AgentProvider.claude : nil, codex ? .codex : nil, opencode ? .opencode : nil, copilot ? .copilot : nil, agy ? .agy : nil].compactMap { $0 }
             .filter { usage.snapshot.seen.contains($0) || ($0 == .codex && !codexAccounts.isEmpty) }
     }
 
@@ -59,7 +61,7 @@ struct NotchAgentsView: View {
             } else {
                 let rows = rows
                 TimelineView(.periodic(from: .now, by: 15)) { context in
-                    if NotchAgentSupport.contentHeight(rows) > size.height + 0.5 {
+                    if NotchAgentSupport.contentHeight(rows, agyFilter: agyFilter) > size.height + 0.5 {
                         ScrollView { grid(rows, now: context.date) }
                             .scrollIndicators(.automatic)
                     } else {
@@ -100,7 +102,7 @@ struct NotchAgentsView: View {
                 HStack(spacing: NotchAgentSupport.spacing) {
                     ForEach(row) { tile in card(tile, now: now) }
                 }
-                .frame(height: NotchAgentSupport.height(of: row))
+                .frame(height: NotchAgentSupport.height(of: row, agyFilter: agyFilter))
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
@@ -112,9 +114,16 @@ struct NotchAgentsView: View {
         switch tile.card {
         case .limits:
             if let provider = tile.provider {
-                NotchAgentLimitsCard(provider: provider, snapshot: snapshot, now: now,
-                                     display: NotchAgentLimitDisplay(rawValue: display) ?? .remaining, text: text,
-                                     account: account(tile, now: now))
+                if provider == .agy {
+                    NotchAgentAgyLimitsCard(snapshot: snapshot, now: now,
+                                            display: NotchAgentLimitDisplay(rawValue: display) ?? .remaining,
+                                            text: text, checking: usage.agyChecking,
+                                            failure: usage.agyFailure)
+                } else {
+                    NotchAgentLimitsCard(provider: provider, snapshot: snapshot, now: now,
+                                         display: NotchAgentLimitDisplay(rawValue: display) ?? .remaining, text: text,
+                                         account: account(tile, now: now))
+                }
             }
         case .spend:
             NotchAgentSpendCard(snapshot: snapshot, providers: providers, period: shown, text: text)
@@ -181,6 +190,74 @@ private struct NotchAgentAccount {
     let refreshHint: String
     let checkLabel: String
     let refresh: () -> Void
+}
+
+/// A meter row for an agent limit window: its label, reset countdown, percentage, and bar.
+private struct NotchAgentLimitRowView: View {
+    let window: AgentLimitWindow
+    let label: String
+    let provider: AgentProvider
+    let now: Date
+    let display: NotchAgentLimitDisplay
+    let text: NotchAgentStrings
+    var observedAt: Date? = nil
+    @Environment(\.locale) private var locale
+
+    private var remaining: Bool { display == .remaining }
+    private var fraction: Double { remaining ? window.remainingFraction : window.usedFraction }
+    private var tint: Color { agentLimitTint(provider, usedFraction: window.usedFraction) }
+    private var pace: Double? {
+        AgentLimitSupport.pace(for: window, now: now).map { remaining ? 1 - $0.elapsed : $0.elapsed }
+    }
+
+    private func countdown(to date: Date) -> String {
+        let seconds = date.timeIntervalSince(now)
+        return AgentFormat.duration(max(60, seconds), locale: locale, units: seconds >= 3600 ? 2 : 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Group {
+                    if let resets = AgentLimitSupport.displayedReset(window, now: now) {
+                        Label((window.estimatedResetsAt == nil ? "" : "≈ ") + countdown(to: resets),
+                              systemImage: "arrow.clockwise")
+                            .labelStyle(NotchAgentInlineLabel())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(size: 9.5))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                Spacer(minLength: 2)
+                Text(AgentFormat.percent(fraction))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(tint == provider.tint ? Color.white : tint)
+                    .contentTransition(.numericText())
+            }
+            NotchAgentMeter(value: fraction, pace: pace, tint: tint, height: 4)
+        }
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        var parts = [label, text.usedShare(AgentFormat.percent(window.usedFraction)),
+                     text.left(AgentFormat.percent(window.remainingFraction))]
+        if let resets = AgentLimitSupport.displayedReset(window, now: now) {
+            parts.append(resets.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale)))
+            if window.estimatedResetsAt != nil { parts.append(text.estimated) }
+        }
+        if let observedAt, now.timeIntervalSince(observedAt) > 600 {
+            parts.append(text.updated(observedAt.formatted(.relative(presentation: .named).locale(locale))))
+        }
+        return parts.joined(separator: " · ")
+    }
 }
 
 private struct NotchAgentLimitsCard: View {
@@ -286,39 +363,8 @@ private struct NotchAgentLimitsCard: View {
     /// A usage-based forecast would read as a promise, so a row says only
     /// what is spent and when the window renews.
     private func row(_ window: AgentLimitWindow) -> some View {
-        let pace = AgentLimitSupport.pace(for: window, now: now)
-        let tint = agentLimitTint(provider, usedFraction: window.usedFraction)
-        let remaining = display == .remaining
-        let fraction = remaining ? window.remainingFraction : window.usedFraction
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                Text(label(window))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Group {
-                    if let resets = AgentLimitSupport.displayedReset(window, now: now) {
-                        Label((window.estimatedResetsAt == nil ? "" : "≈ ") + countdown(to: resets),
-                              systemImage: "arrow.clockwise")
-                            .labelStyle(NotchAgentInlineLabel())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .font(.system(size: 9.5))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                Spacer(minLength: 2)
-                Text(AgentFormat.percent(fraction))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(tint == provider.tint ? Color.white : tint)
-                    .contentTransition(.numericText())
-            }
-            NotchAgentMeter(value: fraction, pace: pace.map { remaining ? 1 - $0.elapsed : $0.elapsed },
-                            tint: tint, height: 4)
-        }
-        .help(help(window))
+        NotchAgentLimitRowView(window: window, label: label(window), provider: provider, now: now,
+                               display: display, text: text, observedAt: limits?.observedAt)
     }
 
     /// What the window covers: its length, or the model it is kept for.
@@ -340,18 +386,6 @@ private struct NotchAgentLimitsCard: View {
         return AgentFormat.duration(max(60, seconds), locale: locale, units: seconds >= 3600 ? 2 : 1)
     }
 
-    private func help(_ window: AgentLimitWindow) -> String {
-        var parts = [label(window), text.usedShare(AgentFormat.percent(window.usedFraction)),
-                     text.left(AgentFormat.percent(window.remainingFraction))]
-        if let resets = AgentLimitSupport.displayedReset(window, now: now) {
-            parts.append(resets.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale)))
-            if window.estimatedResetsAt != nil { parts.append(text.estimated) }
-        }
-        if let observed = limits?.observedAt, now.timeIntervalSince(observed) > 600 {
-            parts.append(text.updated(observed.formatted(.relative(presentation: .named).locale(locale))))
-        }
-        return parts.joined(separator: " · ")
-    }
 
     /// Without a recent reading from the Claude app, the session still ends
     /// five hours after its first request, so the window itself is known.
@@ -449,6 +483,167 @@ private struct NotchAgentLimitsCard: View {
     }
 }
 
+private struct NotchAgentAgyLimitsCard: View {
+    let snapshot: AgentUsageSnapshot
+    let now: Date
+    let display: NotchAgentLimitDisplay
+    let text: NotchAgentStrings
+    let checking: Bool
+    let failure: AgentAgyServer.Failure?
+    @Environment(\.locale) private var locale
+
+    private struct WindowGroup: Identifiable {
+        let id: String
+        let title: String
+        let windows: [AgentLimitWindow]
+    }
+
+    private var limits: AgentLimits? {
+        snapshot.limits[.agy]
+    }
+
+    /// Muted only when the last load failed, not while a reading ages.
+    private var stale: Bool { failure != nil }
+
+    private var windows: [AgentLimitWindow] {
+        (limits?.windows ?? []).map { AgentLimitSupport.current($0, at: now) }
+    }
+
+    private var isPaid: Bool {
+        windows.contains { $0.scope == "Gemini 4 Argon" }
+    }
+
+    private var groupedWindows: [WindowGroup] {
+        var groups: [String: [AgentLimitWindow]] = [:]
+        var order: [String] = []
+        for window in windows {
+            let scope = window.scope ?? ""
+            if groups[scope] == nil {
+                order.append(scope)
+            }
+            groups[scope, default: []].append(window)
+        }
+        return order.compactMap { scope in
+            guard let allInScope = groups[scope], !allInScope.isEmpty else { return nil }
+            let session = allInScope.first { $0.kind == .session }
+            let weekly = allInScope.first { $0.kind == .weekly }
+            let other = allInScope.filter { $0.kind != .session && $0.kind != .weekly }
+            let ordered = ([session, weekly].compactMap { $0 }) + other
+            guard !ordered.isEmpty else { return nil }
+            return WindowGroup(id: scope, title: scope, windows: ordered)
+        }
+    }
+
+    var body: some View {
+        let windows = windows
+        NotchAgentCardChrome {
+            VStack(alignment: .leading, spacing: 6) {
+                NotchAgentCardHeader(title: AgentProvider.agy.displayName, symbol: AgentProvider.agy.symbol,
+                                     tint: AgentProvider.agy.tint, provider: .agy) {
+                    HStack(spacing: 4) {
+                        if isPaid { NotchAgentChip(text: "Paid", tint: AgentProvider.agy.tint) }
+                        if checking {
+                            ProgressView().controlSize(.mini).scaleEffect(0.65).frame(width: 12, height: 12)
+                        }
+                        if !snapshot.working(.agy).isEmpty { NotchAgentPulse(tint: AgentProvider.agy.tint, size: 5) }
+                    }
+                }
+
+                if windows.isEmpty {
+                    estimateOrFallback
+                } else {
+                    meters(groupedWindows)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func meters(_ groups: [WindowGroup]) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            ForEach(groups) { group in
+                VStack(alignment: .leading, spacing: 3) {
+                    if !group.title.isEmpty {
+                        Text(group.title.uppercased())
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .kerning(0.5)
+                            .foregroundStyle(.secondary)
+                    }
+                    VStack(spacing: 5) {
+                        ForEach(group.windows) { window in
+                            NotchAgentLimitRowView(window: window, label: rowLabel(window), provider: .agy,
+                                                   now: now, display: display, text: text,
+                                                   observedAt: limits?.observedAt)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .opacity(stale ? 0.6 : 1)
+    }
+
+    private func rowLabel(_ window: AgentLimitWindow) -> String {
+        switch window.kind {
+        case .session: return text.session
+        case .weekly: return text.weekly
+        case .other:
+            guard let minutes = window.minutes else { return text.readoutLimit }
+            return AgentFormat.duration(TimeInterval(minutes) * 60, locale: locale, units: 1)
+        }
+    }
+
+    @ViewBuilder private var estimateOrFallback: some View {
+        let agyUsage = snapshot.usage(.today).byProvider[.agy]
+        if let agyUsage, agyUsage.tokens.total > 0 || agyUsage.requests > 0 || agyUsage.cost > 0 {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Text(text.period(.today))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                    Spacer(minLength: 2)
+                    Text("≥ " + AgentFormat.cost(agyUsage.cost))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .help(text.unpriced)
+                summaryRow
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(failure == .missing ? "Antigravity CLI (agy) not found" : text.waitingForLimits)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                summaryRow
+            }
+        }
+    }
+
+    private var summaryRow: some View {
+        let agyUsage = snapshot.usage(.today).byProvider[.agy]
+        return HStack(spacing: 4) {
+            if let agyUsage, agyUsage.tokens.total > 0 {
+                Text(AgentFormat.tokens(agyUsage.tokens.total))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                if agyUsage.cost > 0 {
+                    Text("· ≥ " + AgentFormat.cost(agyUsage.cost))
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 2)
+            if let last = snapshot.lastActivity[.agy] {
+                Text(last.formatted(.relative(presentation: .named, unitsStyle: .abbreviated).locale(locale)))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
 /// A glyph and its words, closer together than a stock label.
 private struct NotchAgentInlineLabel: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -477,7 +672,9 @@ private struct NotchAgentSpendCard: View {
                     if period == .month { multiples(usage) }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text((usage.fullyPriced ? "" : "≥ ") + AgentFormat.cost(usage.total.cost))
+                    let hasAgyEstimate = (usage.byProvider[.agy]?.cost ?? 0) > 0
+                    let isEstimated = !usage.fullyPriced || hasAgyEstimate
+                    Text((isEstimated ? "≥ " : "") + AgentFormat.cost(usage.total.cost))
                         .font(.system(size: 22, weight: .medium, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -489,7 +686,7 @@ private struct NotchAgentSpendCard: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .help(usage.fullyPriced ? text.valueNote : text.unpriced)
+                .help(usage.fullyPriced && (usage.byProvider[.agy]?.cost ?? 0) == 0 ? text.valueNote : text.unpriced)
                 split(usage)
                 Text(footer(usage))
                     .font(.system(size: 10))
@@ -590,18 +787,34 @@ private struct NotchAgentLiveCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if session.needsApproval {
+                    HStack(spacing: 2) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 8, weight: .bold))
+                        Text("Approval")
+                            .font(.system(size: 8.5, weight: .bold))
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.orange.opacity(0.18), in: Capsule(style: .continuous))
+                }
                 Spacer(minLength: 4)
                 Text(AgentFormat.clock(now.timeIntervalSince(session.started)))
                     .font(.system(size: 11, weight: .medium))
                     .monospacedDigit()
-                    .foregroundStyle(session.provider.tint)
+                    .foregroundStyle(session.needsApproval ? .orange : session.provider.tint)
             }
             // Tokens the agent wrote, as its own window counts them; every
             // call also reads the whole context again, which the tooltip and
             // the cost include.
+            let costString: String = {
+                guard session.cost > 0 else { return "" }
+                return (session.provider == .agy ? "≥ " : "") + AgentFormat.cost(session.cost)
+            }()
             Text([AgentPricing.displayName(session.model),
                   session.tokens.output > 0 ? text.written(AgentFormat.tokens(session.tokens.output)) : "",
-                  session.cost > 0 ? AgentFormat.cost(session.cost) : ""]
+                  costString]
                     .filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.system(size: 9.5))
                 .foregroundStyle(.secondary)
@@ -738,7 +951,14 @@ private struct NotchAgentShareCard: View {
                 .fill(tint.opacity(0.85))
                 .frame(width: max(3, 44 * weight / peak), height: 4)
                 .frame(width: 44, alignment: .leading)
-            Text(byCost ? AgentFormat.cost(share.totals.cost) : AgentFormat.tokens(share.totals.tokens.total))
+            let valueText: String = {
+                if byCost {
+                    let prefix = share.provider == .agy ? "≥ " : ""
+                    return prefix + AgentFormat.cost(share.totals.cost)
+                }
+                return AgentFormat.tokens(share.totals.tokens.total)
+            }()
+            Text(valueText)
                 .font(.system(size: 10, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)

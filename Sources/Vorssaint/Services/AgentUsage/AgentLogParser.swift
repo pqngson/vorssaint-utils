@@ -21,6 +21,8 @@ enum AgentLogEntry: Equatable {
     case turnContext(model: String, project: String)
     /// Work continues; nil when the line was not worth decoding for its time.
     case turnActive(Date?)
+    /// The agent paused to ask the user a question or awaits tool approval.
+    case turnNeedsApproval(Date?)
     /// A step ended expecting the agent to go on; unless work follows soon,
     /// the agent stopped there and its turn is over.
     case turnSettled(Date)
@@ -61,6 +63,9 @@ struct AgentLogState: Equatable {
     var copilotReportedRequests: [String: Int] = [:]
     var copilotTurnID: String?
     var copilotFinalResponse = false
+    /// Antigravity named the workspace in the person's message, which
+    /// outranks the folder a command runs in.
+    var namedWorkspace = false
     /// The parent session when a database row belongs to a subagent.
     var parentSession = ""
     /// OpenCode stores all sessions in one database, tracking per-session state.
@@ -179,6 +184,191 @@ enum AgentLogParser {
     static func copilotEvent(_ type: String) -> Bool {
         ["user.message", "assistant.turn_start", "assistant.message", "assistant.turn_end",
          "session.start", "session.context_changed", "session.model_change", "session.shutdown", "abort"].contains(type)
+    }
+
+    // MARK: Antigravity
+
+    static func parseAntigravity(_ line: Data, state: inout AgentLogState, now: Date) -> [AgentLogEntry] {
+        let response = contains(line, #""type":"PLANNER_RESPONSE""#)
+        guard response || contains(line, #""type":"USER_INPUT""#) else {
+            // Other steps carry tool output such as file contents and command
+            // results; while a turn is open they only say that work goes on.
+            return state.turnOpen && contains(line, #""type":""#) ? [.turnActive(nil)] : []
+        }
+        guard let json = object(line), let type = json["type"] as? String else { return [] }
+        let date = timestamp(json["created_at"]) ?? now
+
+        switch type {
+        case "USER_INPUT":
+            var entries: [AgentLogEntry] = []
+            // The previous turn never wrote its final response, as after
+            // stopping the agent: it ends without finishing.
+            if state.turnOpen {
+                entries.append(.turnEnded(date, completed: false, duration: nil))
+            }
+            state.turnOpen = true
+            if let content = json["content"] as? String {
+                if let model = antigravityModel(content) { state.model = model }
+                if let workspace = antigravityWorkspace(content) {
+                    state.project = workspace
+                    state.namedWorkspace = true
+                }
+                if state.session.isEmpty, let session = antigravitySession(content) { state.session = session }
+            }
+            entries.append(.turnBegan(date))
+            if !state.model.isEmpty || !state.project.isEmpty {
+                entries.append(.turnContext(model: state.model, project: state.project))
+            }
+            return entries
+
+        case "PLANNER_RESPONSE":
+            if let model = json["model"] as? String, !model.isEmpty {
+                state.model = native(model)
+            }
+            let toolCalls = json["tool_calls"] as? [[String: Any]] ?? []
+            // A command's working folder stands in only until the person's
+            // message names the workspace; a file's folder never does.
+            if !state.namedWorkspace {
+                for tool in toolCalls {
+                    guard let cwd = (tool["args"] as? [String: Any])?["Cwd"] as? String else { continue }
+                    let folder = cwd.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                    if !folder.isEmpty { state.project = projectName(folder) }
+                }
+            }
+
+            let input = int(json["input_tokens"])
+            let cacheWrite = int(json["cache_write_input_tokens"]) + int(json["cache_creation_input_tokens"])
+            let cacheRead = int(json["cache_read_tokens"]) + int(json["cache_read_input_tokens"])
+            let output = int(json["output_tokens"])
+            let reasoning = int(json["thinking_tokens"]) + int(json["reasoning_tokens"])
+            let tokens = AgentTokens(input: input, cacheWrite: cacheWrite, cacheRead: cacheRead, output: output, reasoning: reasoning)
+            let billable = AgentBillable(tokens: tokens)
+            let priced: (cost: Double?, savings: Double) = tokens.total > 0
+                ? AgentPricing.cost(billable, model: state.model)
+                : (nil, 0)
+
+            let step = json["step_index"] as? Int ?? 0
+            let record = AgentUsageRecord(
+                provider: .agy, date: date, model: state.model, project: state.project,
+                session: state.session, tokens: tokens, cost: priced.cost, savings: priced.savings
+            )
+            var entries: [AgentLogEntry] = []
+            if !state.turnOpen {
+                state.turnOpen = true
+                entries.append(.turnBegan(date))
+            }
+            if !state.model.isEmpty || !state.project.isEmpty {
+                entries.append(.turnContext(model: state.model, project: state.project))
+            }
+            entries.append(.usage(key: "antigravity:\(state.session):\(step)", record: record, billable: billable))
+
+            let status = json["status"] as? String
+            let needsApproval = status == "WAITING_FOR_USER" || toolCalls.contains { tool in
+                let name = ((tool["name"] as? String) ?? (tool["tool_name"] as? String) ?? "").lowercased()
+                return name == "ask_question" || name == "confirm" || name.contains("ask_user")
+            }
+
+            // A stopped response is still saved as DONE; the next message
+            // ends that turn. Only a failure ends it here.
+            if status == "ERROR" {
+                state.turnOpen = false
+                entries.append(.turnEnded(date, completed: false, duration: nil))
+            } else if toolCalls.isEmpty && (status == "DONE" || status == nil) {
+                state.turnOpen = false
+                entries.append(.turnEnded(date, completed: true, duration: nil))
+            } else if needsApproval {
+                entries.append(.turnNeedsApproval(date))
+            } else {
+                entries.append(.turnActive(date))
+            }
+            return entries
+
+        default:
+            return []
+        }
+    }
+
+    /// The model the person picked, from the settings change Antigravity
+    /// adds to their message, or explicit model identifiers in their prompt.
+    private static func antigravityModel(_ content: String) -> String? {
+        if let change = content.range(of: "<USER_SETTINGS_CHANGE>"),
+           let range = content[change.upperBound...].range(of: "Model Selection`") {
+            let tail = content[range.upperBound...]
+            if let toRange = tail.range(of: " to ") {
+                let afterTo = tail[toRange.upperBound...]
+                var endIndex = afterTo.endIndex
+                for candidate in [". No need", ".</USER_SETTINGS_CHANGE>", "</USER_SETTINGS_CHANGE>", ".\n", "\n"] {
+                    if let found = afterTo.range(of: candidate), found.lowerBound < endIndex { endIndex = found.lowerBound }
+                }
+                let model = String(afterTo[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !model.isEmpty { return model }
+            }
+        }
+        if content.contains("Gemini 4 Argon") || content.contains("gemini-4-argon") {
+            return "gemini-4-argon"
+        }
+        if content.contains("Gemini 3.8 Flash") || content.contains("gemini-3.8-flash") {
+            return "gemini-3.8-flash"
+        }
+        if content.contains("Gemini 3.7 Flash") || content.contains("gemini-3.7-flash") {
+            return "gemini-3.7-flash"
+        }
+        if content.contains("Gemini 2.5 Pro") || content.contains("gemini-2.5-pro") {
+            return "gemini-2.5-pro"
+        }
+        if content.contains("Gemini 1.5 Pro") || content.contains("gemini-1.5-pro") {
+            return "gemini-1.5-pro"
+        }
+        return nil
+    }
+
+    private static func antigravityWorkspace(_ content: String) -> String? {
+        if let range = content.range(of: "[URI] -> [CorpusName]:\n") {
+            let tail = content[range.upperBound...]
+            if let lineEnd = tail.firstIndex(of: "\n"),
+               let arrow = tail[..<lineEnd].range(of: " -> ") {
+                let name = projectName(String(tail[..<arrow.lowerBound]))
+                if !name.isEmpty { return name }
+            }
+        }
+        if let range = content.range(of: "Active Workspaces:") {
+            let tail = content[range.upperBound...]
+            if let dashRange = tail.range(of: "- ") {
+                let sub = tail[dashRange.upperBound...]
+                let line = sub.firstIndex(of: "\n").map { sub[..<$0] } ?? sub
+                let path = line.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                let name = projectName(path)
+                if !name.isEmpty { return name }
+            }
+        }
+        if let range = content.range(of: "Command Working Directory: ") {
+            let tail = content[range.upperBound...]
+            let line = tail.firstIndex(of: "\n").map { tail[..<$0] } ?? tail
+            let path = line.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            let name = projectName(path)
+            if !name.isEmpty { return name }
+        }
+        if let range = content.range(of: "CWD: ") {
+            let tail = content[range.upperBound...]
+            let line = tail.firstIndex(of: "\n").map { tail[..<$0] } ?? tail
+            let path = line.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            let name = projectName(path)
+            if !name.isEmpty { return name }
+        }
+        if let range = content.range(of: "Active Document: ") {
+            let tail = content[range.upperBound...]
+            let line = tail.firstIndex(of: "\n").map { tail[..<$0] } ?? tail
+            let path = line.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            let name = projectName(path)
+            if !name.isEmpty { return name }
+        }
+        return nil
+    }
+
+    private static func antigravitySession(_ content: String) -> String? {
+        guard let range = content.range(of: "Conversation ID: ") else { return nil }
+        let session = content[range.upperBound...].prefix(while: { $0.isLetter || $0.isNumber || $0 == "-" })
+        return session.isEmpty ? nil : String(session)
     }
 
     /// Codex logs a reading for each allowance: the main one under "codex",

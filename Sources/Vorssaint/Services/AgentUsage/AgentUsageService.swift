@@ -26,6 +26,8 @@ final class AgentUsageService: ObservableObject {
     @Published private(set) var claudeAppChecked: Date?
     @Published private(set) var claudeAccountChecking = false
     @Published private(set) var claudeAccountFailure: AgentClaudeServer.Failure?
+    @Published private(set) var agyChecking = false
+    @Published private(set) var agyFailure: AgentAgyServer.Failure?
     /// The day of the price list in use.
     @Published private(set) var pricesUpdated: Date?
     let events = PassthroughSubject<AgentUsageEvent, Never>()
@@ -74,6 +76,9 @@ final class AgentUsageService: ObservableObject {
     /// Checks in a row that Claude Code did not answer, counted again from
     /// zero once the Mac is back online.
     private var claudeAccountUnreachable = 0
+    private let agyAccountQueue = DispatchQueue(label: "com.vorssaint.agy-limits", qos: .utility)
+    private var agyRequest: AgentAgyServer.Request?
+    private var agyAttempted = Date.distantPast
     /// Whether the Mac has a network, as the reading queue last heard.
     private var online = true
     /// The AI page is on the island, which asks Claude Code more often.
@@ -84,6 +89,7 @@ final class AgentUsageService: ObservableObject {
     private var readerCancellation: Cancellation?
     private var enabled: Set<AgentProvider> = []
     private var store = AgentUsageStore()
+    private let agyConversationReader = AgentAgyConversationReader()
     private var cursors: [String: AgentLogCursor] = [:]
     private var watcher: AgentLogWatcher?
     private var watchedRoots: [AgentLogRoot] = []
@@ -137,6 +143,7 @@ final class AgentUsageService: ObservableObject {
         }
         syncPrices()
         refreshClaudeLimits()
+        refreshAgyLimits()
     }
 
     /// Stops reading while the island is away, as with the display asleep or
@@ -150,6 +157,7 @@ final class AgentUsageService: ObservableObject {
         guard running, !paused else { return }
         paused = true
         cancelClaudeLimits()
+        cancelAgyLimits()
         timer?.invalidate()
         timer = nil
         queue.async { [self] in
@@ -184,8 +192,11 @@ final class AgentUsageService: ObservableObject {
         guard running else { return }
         running = false
         cancelClaudeLimits()
+        cancelAgyLimits()
         claudeAccountAttempted = .distantPast
+        agyAttempted = .distantPast
         claudeAccountFailure = nil
+        agyFailure = nil
         claudeAccountUnreachable = 0
         online = true
         paused = false
@@ -209,6 +220,7 @@ final class AgentUsageService: ObservableObject {
             network = nil
             offlineSince = nil
             store = AgentUsageStore()
+            agyConversationReader.reset()
             cursors.removeAll()
             published = AgentUsageSnapshot()
             previousLimits.removeAll()
@@ -243,6 +255,7 @@ final class AgentUsageService: ObservableObject {
         if !preview { pageVisible = true }
         guard running else { return }
         refreshClaudeLimits(pageShows: true)
+        refreshAgyLimits(pageShows: true)
         queue.async { [self] in
             guard readerSession >= 0 else { return }
             readClaudePlan()
@@ -272,12 +285,15 @@ final class AgentUsageService: ObservableObject {
             readerCancellation = cancellation
             enabled = providers
             store = AgentUsageStore()
+            agyConversationReader.reset()
             cursors.removeAll()
             // Prices first, so the first read is already priced.
             loadPrices()
             // Keep the loading state until all initial history has been read.
             let horizon = Date().addingTimeInterval(-Self.horizon)
             let roots = AgentLogRoot.all(home: home).filter { providers.contains($0.provider) }
+            // Cursors find an Antigravity conversation relative to its root.
+            watchedRoots = roots.filter(\.exists)
             let files = AgentLogReader.discover(roots, since: horizon)
             // Resumes where the last launch stopped, among the logs there now.
             if let saved = AgentUsageArchive.load(), saved.providers == providers {
@@ -290,6 +306,11 @@ final class AgentUsageService: ObservableObject {
                 // A stop while reading leaves the rest for the next start.
                 guard !cancellation.isCancelled else { return }
                 read(file.path, provider: file.provider)
+            }
+            if providers.contains(.agy) {
+                guard !cancellation.isCancelled else { return }
+                agyConversationReader.scan(into: store, since: horizon, home: home,
+                                          shouldContinue: { !cancellation.isCancelled })
             }
             guard !cancellation.isCancelled else { return }
             let now = Date()
@@ -482,7 +503,7 @@ final class AgentUsageService: ObservableObject {
             cursors[path] = nil
             return store.forget(file: path)
         }
-        let cursor = cursors[path] ?? AgentLogCursor(path: path, provider: provider)
+        let cursor = cursors[path] ?? AgentLogCursor(path: path, provider: provider, roots: watchedRoots)
         cursors[path] = cursor
         var changed = false
         let now = Date()
@@ -519,7 +540,15 @@ final class AgentUsageService: ObservableObject {
                 self?.filesChanged(paths, rescan: rescan)
             }
         }
-        if existing.isEmpty { watcher?.stop() } else { watcher?.start(existing.map(\.url.path)) }
+        var watchPaths = existing.map(\.url.path)
+        if enabled.contains(.agy) {
+            for dir in AgentAgyConversationReader.directories(home: home) {
+                if FileManager.default.fileExists(atPath: dir) {
+                    watchPaths.append(dir)
+                }
+            }
+        }
+        if watchPaths.isEmpty { watcher?.stop() } else { watcher?.start(watchPaths) }
     }
 
     private func filesChanged(_ paths: [String], rescan: Bool) {
@@ -535,6 +564,15 @@ final class AgentUsageService: ObservableObject {
                 let actualPath = path.hasSuffix("-wal") ? String(path.dropLast(4)) : path
                 guard let root = watchedRoots.first(where: { $0.accepts(actualPath) }) else { continue }
                 if read(actualPath, provider: root.provider) { changed = true }
+            }
+        }
+        if enabled.contains(.agy) {
+            let agyDirs = AgentAgyConversationReader.directories(home: home)
+            if rescan || paths.contains(where: { path in agyDirs.contains(where: { path.hasPrefix($0) }) }) {
+                if agyConversationReader.scan(into: store, since: Date().addingTimeInterval(-Self.horizon), home: home,
+                                              shouldContinue: { !(self.readerCancellation?.isCancelled ?? true) }) {
+                    changed = true
+                }
             }
         }
         // Saved tool output and lines with nothing to keep do not change the
@@ -558,6 +596,7 @@ final class AgentUsageService: ObservableObject {
         guard running else { return }
         syncPrices()
         refreshClaudeLimits()
+        refreshAgyLimits()
         queue.async { [self] in
             guard readerSession >= 0 else { return }
             let now = Date()
@@ -647,6 +686,8 @@ final class AgentUsageService: ObservableObject {
                 guard self.providers.contains(provider), NotchAgentSupport.limitThreshold() != nil else { return }
             case .budgetReached:
                 guard NotchAgentSupport.dailyBudget() != nil else { return }
+            case .needsApproval(let provider, _):
+                guard self.providers.contains(provider) else { return }
             }
             self.events.send(event)
         }
@@ -831,6 +872,59 @@ final class AgentUsageService: ObservableObject {
         guard online != self.online else { return }
         self.online = online
         if online { claudeAccountUnreachable = 0 }
+    }
+
+    // MARK: Antigravity
+
+    func refreshAgyLimits(now: Date = Date(), pageShows: Bool = false, force: Bool = false) {
+        guard force || agyLimitsDue(at: now, pageShows: pageShows) else { return }
+        agyAttempted = now
+        agyChecking = true
+        let request = AgentAgyServer.Request()
+        agyRequest = request
+        let session = self.session
+        let home = self.home
+        agyAccountQueue.async { [weak self] in
+            let result: Result<AgentLimits, AgentAgyServer.Failure>
+            if let executable = AgentAgyServer.executable(home: home, searchPath: ProcessInfo.processInfo.environment["PATH"]) {
+                result = request.run(executable: executable, home: home)
+            } else {
+                result = .failure(.missing)
+            }
+            DispatchQueue.main.async {
+                guard let self, self.running, !self.paused, self.session == session,
+                      self.agyRequest === request else { return }
+                self.agyRequest = nil
+                self.agyChecking = false
+                switch result {
+                case .failure(let failure):
+                    self.agyFailure = failure
+                case .success(let limits):
+                    self.agyFailure = nil
+                    self.queue.async {
+                        guard self.readerSession == session, self.enabled.contains(.agy) else { return }
+                        self.store.setLimits(limits)
+                        self.checkLimits()
+                        self.schedulePublish()
+                    }
+                }
+            }
+        }
+    }
+
+    private func cancelAgyLimits() {
+        guard let request = agyRequest else { return }
+        request.cancel()
+        agyRequest = nil
+        agyChecking = false
+        agyAttempted = .distantPast
+    }
+
+    private func agyLimitsDue(at now: Date, pageShows: Bool) -> Bool {
+        guard running, !paused, online, providers.contains(.agy), agyRequest == nil,
+              NotchAgentSupport.limitsInUse(pageShown: pageVisible || pageShows) else { return false }
+        let freshness = (pageVisible || pageShows) ? AgentAgyServer.freshness : AgentAgyServer.backgroundFreshness
+        return now.timeIntervalSince(agyAttempted) >= freshness
     }
 
     // MARK: Prices
