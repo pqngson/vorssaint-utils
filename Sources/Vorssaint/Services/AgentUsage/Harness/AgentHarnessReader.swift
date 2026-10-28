@@ -32,10 +32,3 @@ extension AgentProvider {
     }
 }
 
-struct AntigravityReader: AgentHarnessReader {
-    var provider: AgentProvider { .agy }
-
-    func parse(_ line: Data, state: inout AgentLogState, now: Date) -> [AgentLogEntry] {
-        AgentLogParser.parseAntigravity(line, state: &state, now: now)
-    }
-}

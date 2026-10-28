@@ -621,16 +621,10 @@ final class NotchService: ObservableObject {
         }
     }
 
-    /// Supported pairs can share the closed island: either explicitly chosen,
-    /// or automatically when two tasks are active side by side.
+    /// A single activity never borrows another activity's wing implicitly.
     var compactCompanion: NotchCompactActivity? {
-        guard let activity = compactActivity else { return nil }
-        let companions = compactCompanions(of: activity)
-        if let chosen = activitySelection.companion(available: companions) { return chosen }
-        if activitySelection.preferred == nil || activity == activitySelection.preferred {
-            return companions.first
-        }
-        return nil
+        guard let activity = compactActivity, activity == activitySelection.preferred else { return nil }
+        return activitySelection.companion(available: compactCompanions(of: activity))
     }
 
     private var compactActivityIsVisible: Bool {

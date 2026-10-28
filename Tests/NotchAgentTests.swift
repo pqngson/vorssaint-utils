@@ -3397,7 +3397,7 @@ enum NotchAgentTests {
                      "the saved order ignores unknown and repeated cards and appends new ones")
         defaults.set(false, forKey: DefaultsKey.notchAgentsCodex)
         suite.expect(NotchAgentSupport.providers(in: defaults) == [.claude, .opencode, .copilot, .antigravity], "an agent can be left out")
-        defaults.set(false, forKey: DefaultsKey.notchAgentsAntigravity)
+        defaults.set(false, forKey: DefaultsKey.notchAgentsAgy)
         suite.expect(NotchAgentSupport.providers(in: defaults) == [.claude, .opencode, .copilot], "another agent can be left out")
         defaults.set(false, forKey: DefaultsKey.notchAgentsOpenCode)
         suite.expect(NotchAgentSupport.providers(in: defaults) == [.claude, .copilot], "OpenCode keeps its own preference")

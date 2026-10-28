@@ -1816,10 +1816,6 @@ enum NotchSupport {
                      (running && music, .music)]
         case .calendar where calendar:
             pairs = [(downloads, .downloads), (agents, .agents), (music, .music)]
-        case .agents where agents:
-            pairs = [(music, .music), (downloads, .downloads), (timer, .timer), (calendar, .calendar)]
-        case .music where music:
-            pairs = [(agents, .agents), (downloads, .downloads), (timer, .timer), (calendar, .calendar)]
         default:
             pairs = []
         }

@@ -880,7 +880,6 @@ enum DefaultsKey {
     static let notchAgentsOpenCode = "notchAgentsOpenCode"
     static let notchAgentsCopilot = "notchAgentsCopilot"
     static let notchAgentsAgy = "notchAgentsAgy"
-    static let notchAgentsAntigravity = "notchAgentsAgy"
     static let notchAgentsCardOrder = "notchAgentsCardOrder"
     static let notchAgentsHiddenCards = "notchAgentsHiddenCards"
     static let notchAgentsAgyWindowFilter = "notchAgentsAgyWindowFilter"
