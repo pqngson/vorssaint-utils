@@ -83,6 +83,7 @@ enum AgentAgyServer {
             proc.arguments = ["-p", "/usage", "--output-format", "json"]
 
             var environment = ProcessInfo.processInfo.environment
+            environment["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
             environment["HOME"] = home.path
             let currentPath = environment["PATH"] ?? ""
             let extraPaths = [home.appending(path: ".local/bin").path, "/opt/homebrew/bin", "/usr/local/bin"]
