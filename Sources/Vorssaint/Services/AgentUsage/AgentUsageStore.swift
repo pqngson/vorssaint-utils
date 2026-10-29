@@ -216,9 +216,10 @@ final class AgentUsageStore {
     }
 
     @discardableResult
-    func addUsageRecord(_ record: AgentUsageRecord, billable: AgentBillable, key: String, source: String) -> Bool {
+    func addUsageRecord(_ record: AgentUsageRecord, billable: AgentBillable, key: String, source: String,
+                        recompute: Bool = true) -> Bool {
         let changed = add(record, billable: billable, key: key, source: source, turn: nil, subagent: false)
-        if record.provider == .agy && !record.session.isEmpty {
+        if recompute && record.provider == .agy && !record.session.isEmpty {
             recomputeAgySession(record.session)
         }
         return changed
@@ -238,7 +239,7 @@ final class AgentUsageStore {
         syncAgyTurn(forSession: session)
     }
 
-    private func recomputeAgySession(_ session: String) {
+    func recomputeAgySession(_ session: String) {
         guard !session.isEmpty else { return }
         var tokens = AgentTokens()
         var cost: Double = 0
@@ -262,12 +263,12 @@ final class AgentUsageStore {
         syncAgyTurn(forSession: session)
     }
 
-    private func syncAgyTurn(forSession session: String) {
+    func syncAgyTurn(forSession session: String) {
         guard !session.isEmpty else { return }
-        for file in turns.keys where turns[file]?.provider == .agy && AgentLogCursor.session(of: file, provider: .agy) == session {
+        for file in turns.keys where turns[file]?.provider == .agy && file.contains(session) && AgentLogCursor.session(of: file, provider: .agy) == session {
             syncAgyTurn(forFile: file)
         }
-        for file in waiting.keys where waiting[file]?.provider == .agy && AgentLogCursor.session(of: file, provider: .agy) == session {
+        for file in waiting.keys where waiting[file]?.provider == .agy && file.contains(session) && AgentLogCursor.session(of: file, provider: .agy) == session {
             syncAgyTurn(forFile: file)
         }
     }
@@ -556,7 +557,7 @@ final class AgentUsageStore {
     var saved: Saved {
         var keys = [String](repeating: "", count: records.count)
         for (key, position) in index { keys[position] = key }
-        let kept = records.indices.filter { records[$0].provider != .opencode && records[$0].provider != .agy }.map {
+        let kept = records.indices.filter { records[$0].provider != .opencode }.map {
             Saved.Record(key: keys[$0], record: records[$0], billable: billables[$0], sources: sources[$0])
         }
         return Saved(records: kept,
@@ -637,8 +638,22 @@ struct AgentLogRoot: Equatable {
 
     /// Canonical, because file events report real paths: a folder kept as a
     /// link elsewhere, as dotfile setups do, would otherwise never match.
-    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [AgentLogRoot] {
+    private static let cachedDefaultRoots: [AgentLogRoot] = {
         [(AgentProvider.claude, ".claude/projects"), (.claude, ".config/claude/projects"),
+         (.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
+         (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
+         (.agy, ".gemini/antigravity/brain"),
+         (.agy, ".gemini/antigravity-ide/brain"),
+         (.agy, ".gemini/antigravity-cli/brain")].map { provider, path in
+            AgentLogRoot(provider: provider, url: canonical(FileManager.default.homeDirectoryForCurrentUser.appending(path: path, directoryHint: .isDirectory)))
+        }
+    }()
+
+    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [AgentLogRoot] {
+        if home.path == FileManager.default.homeDirectoryForCurrentUser.path {
+            return cachedDefaultRoots
+        }
+        return [(AgentProvider.claude, ".claude/projects"), (.claude, ".config/claude/projects"),
          (.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
          (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
          (.agy, ".gemini/antigravity/brain"),
@@ -766,21 +781,24 @@ final class AgentLogCursor {
 
     static func session(of path: String, provider: AgentProvider, roots: [AgentLogRoot]? = nil) -> String {
         guard provider == .agy else { return "" }
-        if let root = (roots ?? AgentLogRoot.all()).first(where: { $0.provider == .agy && path.hasPrefix($0.url.path + "/") }) {
-            let relative = String(path.dropFirst(root.url.path.count + 1))
-            if let first = relative.split(separator: "/").first, !first.isEmpty {
-                return String(first)
-            }
-        }
         let parts = path.split(separator: "/")
         if let brainIndex = parts.firstIndex(of: "brain"), brainIndex + 1 < parts.count {
-            return String(parts[brainIndex + 1])
+            let session = String(parts[brainIndex + 1])
+            if !session.isEmpty && !session.hasPrefix(".") {
+                return session
+            }
         }
         if parts.count >= 2, (path as NSString).lastPathComponent == "transcript.jsonl" {
             if let sgIndex = parts.firstIndex(of: ".system_generated"), sgIndex > 0 {
                 return String(parts[sgIndex - 1])
             }
             return String(parts[parts.count - 2])
+        }
+        if let root = (roots ?? AgentLogRoot.all()).first(where: { $0.provider == .agy && path.hasPrefix($0.url.path + "/") }) {
+            let relative = String(path.dropFirst(root.url.path.count + 1))
+            if let first = relative.split(separator: "/").first, !first.isEmpty {
+                return String(first)
+            }
         }
         return ""
     }

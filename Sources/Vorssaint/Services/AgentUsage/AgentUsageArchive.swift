@@ -78,7 +78,7 @@ enum AgentUsageArchive {
         for saved in contents.cursors where found.contains(saved.path) {
             cursors[saved.path] = AgentLogCursor(saved: saved)
         }
-        var gone = store.files.subtracting(cursors.keys)
+        var gone = store.files.filter { !$0.hasSuffix(".db") }.subtracting(cursors.keys)
         let sharing = store.files(sharingWith: gone).subtracting(gone)
         for file in sharing { cursors[file] = nil }
         gone.formUnion(sharing)

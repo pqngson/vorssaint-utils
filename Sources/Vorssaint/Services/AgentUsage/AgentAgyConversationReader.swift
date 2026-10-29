@@ -218,9 +218,12 @@ final class AgentAgyConversationReader {
                 reportedCost: false
             )
 
-            if store.addUsageRecord(record, billable: billable, key: key, source: path) {
+            if store.addUsageRecord(record, billable: billable, key: key, source: path, recompute: false) {
                 changed = true
             }
+        }
+        if changed {
+            store.recomputeAgySession(session)
         }
         if !project.isEmpty {
             store.noteAgySession(session, project: project)

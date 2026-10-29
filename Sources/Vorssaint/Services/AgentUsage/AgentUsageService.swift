@@ -307,16 +307,16 @@ final class AgentUsageService: ObservableObject {
                 guard !cancellation.isCancelled else { return }
                 read(file.path, provider: file.provider)
             }
+            let now = Date()
+            // A turn left open by a crash would otherwise stay working.
+            store.closeIdleTurns(now: now, after: NotchAgentSupport.idleTurn)
+            closeEndedTurns(roots, atLaunch: true)
             if providers.contains(.agy) {
                 guard !cancellation.isCancelled else { return }
                 agyConversationReader.scan(into: store, since: horizon, home: home,
                                           shouldContinue: { !cancellation.isCancelled })
             }
             guard !cancellation.isCancelled else { return }
-            let now = Date()
-            // A turn left open by a crash would otherwise stay working.
-            store.closeIdleTurns(now: now, after: NotchAgentSupport.idleTurn)
-            closeEndedTurns(roots, atLaunch: true)
             // The account Claude Code uses picks the Claude app's readings.
             readClaudePlan()
             readClaudeApp(now: now)
