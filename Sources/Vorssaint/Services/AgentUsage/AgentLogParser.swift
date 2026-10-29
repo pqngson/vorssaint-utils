@@ -239,7 +239,13 @@ enum AgentLogParser {
                 for tool in toolCalls {
                     guard let cwd = (tool["args"] as? [String: Any])?["Cwd"] as? String else { continue }
                     let folder = cwd.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                    if !folder.isEmpty { state.project = projectName(folder) }
+                    if !folder.isEmpty {
+                        if let inferred = inferProject(fromPath: folder) {
+                            state.project = inferred
+                        } else if !folder.contains("/.ai/") && !folder.hasPrefix("~/.ai") && !folder.contains("/.gemini/") {
+                            state.project = projectName(folder)
+                        }
+                    }
                 }
                 if state.project.isEmpty {
                     for tool in toolCalls {
@@ -363,18 +369,52 @@ enum AgentLogParser {
         }
     }
 
+    static func isIgnoredPath(_ rawPath: String) -> Bool {
+        var path = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \t\r\n"))
+        if path.hasPrefix("file://") { path = String(path.dropFirst(7)) }
+        guard !path.isEmpty && path != "/" else { return true }
+        if let range = path.range(of: "/.claude/worktrees/") { path = String(path[..<range.lowerBound]) }
+
+        let expanded = (path as NSString).expandingTildeInPath
+        let ignoredSubstrings = ["/.ai/", "/.gemini/", "/.config/", "/Library/", "/.claude/", "/tmp/", "/private/"]
+        if ignoredSubstrings.contains(where: { path.contains($0) || expanded.contains($0) }) {
+            return true
+        }
+        let ignoredPrefixes = ["~/.ai/", ".ai/", "~/.gemini/", ".gemini/", "~/.config/", ".config/",
+                               "~/.claude/", ".claude/", "/Library/", "Library/", "/tmp/", "tmp/",
+                               "/private/", "private/"]
+        if ignoredPrefixes.contains(where: { path.hasPrefix($0) || expanded.hasPrefix($0) }) {
+            return true
+        }
+        let exactMatches = ["~/.ai", ".ai", "~/.gemini", ".gemini", "~/.config", ".config",
+                            "~/.claude", ".claude", "/Library", "Library", "/tmp", "tmp",
+                            "/private", "private"]
+        if exactMatches.contains(where: { path == $0 || expanded == $0 }) {
+            return true
+        }
+        return false
+    }
+
     static func inferProject(fromPath rawPath: String) -> String? {
+        if isIgnoredPath(rawPath) { return nil }
+
         var path = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \t\r\n"))
         if path.hasPrefix("file://") { path = String(path.dropFirst(7)) }
         guard !path.isEmpty && path != "/" else { return nil }
         if let range = path.range(of: "/.claude/worktrees/") { path = String(path[..<range.lowerBound]) }
 
+        let expandedPath = (path as NSString).expandingTildeInPath
+        let expanded = (expandedPath as NSString).isAbsolutePath
+            ? expandedPath
+            : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(expandedPath)
+
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        var dir = fm.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
-            ? path : (path as NSString).deletingLastPathComponent
+        var dir = fm.fileExists(atPath: expanded, isDirectory: &isDir) && isDir.boolValue
+            ? expanded : (expanded as NSString).deletingLastPathComponent
 
         while !dir.isEmpty && dir != "/" {
+            if isIgnoredPath(dir) { break }
             if fm.fileExists(atPath: (dir as NSString).appendingPathComponent(".git"))
                 || fm.fileExists(atPath: (dir as NSString).appendingPathComponent("_ai"))
                 || fm.fileExists(atPath: (dir as NSString).appendingPathComponent("Package.swift")) {
@@ -386,11 +426,16 @@ enum AgentLogParser {
         }
 
         let parts = path.split(separator: "/").map(String.init)
-        let rootFolders: Set<String> = ["projects", "Projects", "Repositories", "repositories", "workspace", "Workspace"]
-        for (i, part) in parts.enumerated() {
+        let rootFolders: Set<String> = [
+            "projects", "Projects", "Repositories", "repositories", "workspace", "Workspace",
+            "Developer", "developer", "Development", "development"
+        ]
+        for (i, part) in parts.enumerated().reversed() {
             if rootFolders.contains(part), i + 1 < parts.count {
                 let name = parts[i + 1]
-                if !name.isEmpty && !name.hasPrefix(".") { return native(name) }
+                if !name.isEmpty && !name.hasPrefix(".") && !rootFolders.contains(name) {
+                    return native(name)
+                }
             }
         }
 
@@ -398,15 +443,12 @@ enum AgentLogParser {
         for (i, part) in parts.enumerated() {
             if subdirs.contains(part), i > 0 {
                 let name = parts[i - 1]
-                if !name.isEmpty && !name.hasPrefix(".") && name != "Users" { return native(name) }
+                if !name.isEmpty && !name.hasPrefix(".") && name != "Users" && !rootFolders.contains(name) {
+                    return native(name)
+                }
             }
         }
 
-        let parentName = (path as NSString).deletingLastPathComponent
-        let candidate = (parentName as NSString).lastPathComponent
-        if !candidate.isEmpty && candidate != "/" && candidate != "Users" && !candidate.hasPrefix(".") {
-            return native(candidate)
-        }
         return nil
     }
 

@@ -9,6 +9,9 @@ enum AgentAgyConversationReaderTests {
         testProtobufFieldExtraction(suite)
         testModelNameMapping(suite)
         testMalformedProtobuf(suite)
+        testProjectInference(suite)
+        testApprovalTransitions(suite)
+        testAgyTurnSync(suite)
     }
 
     private static func testVarintDecoding(_ suite: TestSuite) {
@@ -113,5 +116,72 @@ enum AgentAgyConversationReaderTests {
         suite.expect(AgentAgyConversationReader.parseFields([], out: &fields),
                      "empty bytes parses to empty map")
         suite.expect(fields.isEmpty, "empty bytes has no fields")
+    }
+
+    private static func testProjectInference(_ suite: TestSuite) {
+        // Global/system config paths should be ignored
+        suite.expect(AgentLogParser.inferProject(fromPath: "~/.ai/directives/planner-seat-directive.md") == nil,
+                     "~/.ai/directives is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "/Users/alice/.ai/directives/rule.md") == nil,
+                     "/Users/alice/.ai/directives is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "~/.gemini/antigravity/brain/session/transcript.jsonl") == nil,
+                     "~/.gemini/... is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "/tmp/scratch.py") == nil,
+                     "/tmp/... is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "/private/tmp/run.sh") == nil,
+                     "/private/tmp/... is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "~/.claude/settings.json") == nil,
+                     "~/.claude/... is ignored")
+        suite.expect(AgentLogParser.inferProject(fromPath: "/Library/Application Support/app/config.json") == nil,
+                     "/Library/... is ignored")
+
+        // Arbitrary paths without .git / Package.swift / _ai / root folder should not be inferred
+        suite.expect(AgentLogParser.inferProject(fromPath: "/some/arbitrary/nested/path/file.txt") == nil,
+                     "arbitrary parent path is not inferred as a project")
+
+        // Recognized root folders
+        suite.expect(AgentLogParser.inferProject(fromPath: "/Users/alice/Developer/Repositories/vorssaint-utils/Sources/main.swift") == "vorssaint-utils",
+                     "recognized Repositories root folder infers project")
+        suite.expect(AgentLogParser.inferProject(fromPath: "/Users/alice/Projects/my-app/Package.swift") == "my-app",
+                     "recognized Projects root folder infers project")
+    }
+
+    private static func testApprovalTransitions(_ suite: TestSuite) {
+        let store = AgentUsageStore()
+        store.reportsTransitions = false
+        let pastDate = Date().addingTimeInterval(-3600)
+        let events = store.apply([.turnNeedsApproval(pastDate)], file: "/path/to/log.jsonl",
+                                 provider: .agy, tracksTurns: true, modified: pastDate)
+        suite.expect(events.isEmpty,
+                     "turnNeedsApproval produces no events when reportsTransitions is false")
+
+        store.reportsTransitions = true
+        let liveEvents = store.apply([.turnNeedsApproval(Date())], file: "/path/to/live.jsonl",
+                                     provider: .agy, tracksTurns: true, modified: Date())
+        suite.expect(liveEvents.count == 1,
+                     "turnNeedsApproval produces event when reportsTransitions is true")
+        if case .needsApproval(let provider, _) = liveEvents.first {
+            suite.expect(provider == .agy, "event provider matches")
+        } else {
+            suite.expect(false, "expected needsApproval event")
+        }
+    }
+
+    private static func testAgyTurnSync(_ suite: TestSuite) {
+        let store = AgentUsageStore()
+        let session = "test-session-123"
+        let logPath = "/Users/alice/.gemini/antigravity/brain/\(session)/transcript.jsonl"
+        let now = Date()
+
+        // Turn begins with a speculative project name "directives"
+        store.apply([.turnBegan(now), .turnContext(model: "gemini-3.8-flash", project: "directives")],
+                    file: logPath, provider: .agy, tracksTurns: true, modified: now)
+        suite.expect(store.live.first?.project == "directives",
+                     "turn initialized with speculative project")
+
+        // Authoritative project arrives from database metadata
+        store.noteAgySession(session, project: "vorssaint-utils")
+        suite.expect(store.live.first?.project == "vorssaint-utils",
+                     "authoritative project overwrites speculative inferred project")
     }
 }

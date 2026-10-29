@@ -44,6 +44,10 @@ final class AgentAgyConversationReader {
                 guard shouldContinue() else { return changed }
                 let path = (dir as NSString).appendingPathComponent(entry)
                 guard let currentStamp = Self.stamp(for: path) else { continue }
+                if currentStamp.size <= 0 {
+                    stamps[path] = currentStamp
+                    continue
+                }
                 if currentStamp.mtime < horizon && currentStamp.walMtime < horizon && stamps[path] == nil {
                     stamps[path] = currentStamp
                     continue
@@ -51,7 +55,7 @@ final class AgentAgyConversationReader {
                 if stamps[path] == currentStamp {
                     continue
                 }
-                if readConversation(at: path, into: store, shouldContinue: shouldContinue) {
+                if readConversation(at: path, stamp: currentStamp, into: store, shouldContinue: shouldContinue) {
                     changed = true
                 }
                 stamps[path] = currentStamp
@@ -79,38 +83,59 @@ final class AgentAgyConversationReader {
         Date(timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1_000_000_000)
     }
 
-    /// Reads one conversation database from a temporary copy and adds records to store.
-    private func readConversation(at path: String, into store: AgentUsageStore,
+    /// Reads one conversation database from a temporary copy (or in place if no WAL) and adds records to store.
+    private func readConversation(at path: String, stamp: Stamp? = nil, into store: AgentUsageStore,
                                   shouldContinue: () -> Bool) -> Bool {
         let filename = (path as NSString).lastPathComponent
         guard filename.hasSuffix(".db") else { return false }
         let session = String(filename.dropLast(3))
 
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("agy_conv_\(UUID().uuidString)")
-        do {
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        } catch {
-            return false
-        }
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
+        let currentStamp = stamp ?? Self.stamp(for: path)
+        guard let currentStamp, currentStamp.size > 0 else { return false }
 
-        for ext in ["", "-wal", "-shm"] {
-            let src = path + ext
-            if FileManager.default.fileExists(atPath: src) {
-                let dest = tempDir.appendingPathComponent(filename + ext).path
-                try? FileManager.default.copyItem(atPath: src, toPath: dest)
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+
+        var tempDir: URL? = nil
+        defer {
+            if let tempDir {
+                try? FileManager.default.removeItem(at: tempDir)
             }
         }
 
-        let copyDbPath = tempDir.appendingPathComponent(filename).path
-        var db: OpaquePointer?
-        defer { sqlite3_close(db) }
-        // The copy is ours: a WAL database without its -shm cannot open read-only.
-        guard sqlite3_open_v2(copyDbPath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
-            return false
+        // Fast path: if there is no uncheckpointed WAL file, open in place read-only as immutable.
+        // This avoids copying hundreds of megabytes across hundreds of database files to temporary storage on launch.
+        if currentStamp.walSize == 0 {
+            let uri = "file://\(path)?immutable=1"
+            if sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil) != SQLITE_OK {
+                db = nil
+            }
+        }
+
+        // Fallback: if WAL has uncheckpointed data or in-place open failed, copy to a temporary directory.
+        if db == nil {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("agy_conv_\(UUID().uuidString)")
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                tempDir = dir
+            } catch {
+                return false
+            }
+
+            for ext in ["", "-wal", "-shm"] {
+                let src = path + ext
+                if FileManager.default.fileExists(atPath: src) {
+                    let dest = dir.appendingPathComponent(filename + ext).path
+                    try? FileManager.default.copyItem(atPath: src, toPath: dest)
+                }
+            }
+
+            let copyDbPath = dir.appendingPathComponent(filename).path
+            // The copy is ours: a WAL database without its -shm cannot open read-only.
+            guard sqlite3_open_v2(copyDbPath, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+                return false
+            }
         }
         sqlite3_busy_timeout(db, 2000)
 
@@ -139,7 +164,7 @@ final class AgentAgyConversationReader {
             }
         }
 
-        let date = startDate ?? Self.stamp(for: path)?.mtime ?? Date()
+        let date = startDate ?? currentStamp.mtime
         let project = workspace.map { AgentLogParser.projectName($0) } ?? ""
 
         // Read gen_metadata

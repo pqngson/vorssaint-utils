@@ -131,7 +131,7 @@ final class AgentUsageStore {
             case .turnActive(let date):
                 guard tracksTurns else { continue }
                 settled[file] = nil
-                let moment = date ?? modified
+                let moment = date ?? (modified != .distantPast ? modified : now)
                 if var turn = turns[file] ?? waiting.removeValue(forKey: file) {
                     turn.lastActivity = max(turn.lastActivity, moment)
                     turn.needsApproval = false
@@ -147,12 +147,14 @@ final class AgentUsageStore {
             case .turnNeedsApproval(let date):
                 guard tracksTurns else { continue }
                 settled[file] = nil
-                let moment = date ?? modified
+                let moment = date ?? (modified != .distantPast ? modified : now)
                 if var turn = turns[file] ?? waiting.removeValue(forKey: file) {
                     turn.lastActivity = max(turn.lastActivity, moment)
                     if !turn.needsApproval {
                         turn.needsApproval = true
-                        events.append(.needsApproval(provider: provider, project: turn.project))
+                        if reportsTransitions {
+                            events.append(.needsApproval(provider: provider, project: turn.project))
+                        }
                     }
                     turns[file] = turn
                 } else {
@@ -160,7 +162,9 @@ final class AgentUsageStore {
                                                    model: "", project: "", tokens: AgentTokens(), cost: 0,
                                                    needsApproval: true)
                     turns[file] = turn
-                    events.append(.needsApproval(provider: provider, project: ""))
+                    if reportsTransitions {
+                        events.append(.needsApproval(provider: provider, project: ""))
+                    }
                 }
                 if provider == .agy {
                     syncAgyTurn(forFile: file)
@@ -177,7 +181,7 @@ final class AgentUsageStore {
                 // A turn that went quiet on the way ends as the whole turn.
                 let quiet = waiting.removeValue(forKey: file)
                 guard let turn = turns.removeValue(forKey: file) ?? quiet, completed, reportsTransitions else { continue }
-                let end = date ?? modified
+                let end = date ?? (modified != .distantPast ? modified : now)
                 guard now.timeIntervalSince(end) <= Self.lateEnd else { continue }
                 events.append(.finished(provider: provider,
                                         duration: max(0, duration ?? end.timeIntervalSince(turn.started)),
@@ -278,7 +282,7 @@ final class AgentUsageStore {
         if !info.model.isEmpty && (turn.model.isEmpty || !info.model.contains("unknown")) {
             turn.model = info.model
         }
-        if !info.project.isEmpty && (turn.project.isEmpty || turn.project == "Antigravity Workspace") {
+        if !info.project.isEmpty {
             turn.project = info.project
         }
         if info.tokens.total > 0 {

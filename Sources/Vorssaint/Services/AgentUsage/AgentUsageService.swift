@@ -504,13 +504,21 @@ final class AgentUsageService: ObservableObject {
             return store.forget(file: path)
         }
         let cursor = cursors[path] ?? AgentLogCursor(path: path, provider: provider, roots: watchedRoots)
+        if cursor.modified == .distantPast {
+            var info = stat()
+            if stat(path, &info) == 0 {
+                cursor.modified = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                                        + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+            }
+        }
         cursors[path] = cursor
         var changed = false
         let now = Date()
         let consume: (Data) -> Void = { [self] line in
             // Apply in log order while the chunk is alive instead of retaining
             // every parsed entry until a potentially multi-gigabyte file ends.
-            let entries = provider.reader.parse(line, state: &cursor.state, now: now)
+            let fallbackDate = cursor.modified != .distantPast ? cursor.modified : now
+            let entries = provider.reader.parse(line, state: &cursor.state, now: fallbackDate)
             guard !entries.isEmpty else { return }
             changed = true
             let isSubagent = provider == .opencode && !cursor.state.parentSession.isEmpty
