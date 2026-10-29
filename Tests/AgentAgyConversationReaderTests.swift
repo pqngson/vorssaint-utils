@@ -78,12 +78,20 @@ enum AgentAgyConversationReaderTests {
     }
 
     private static func testModelNameMapping(_ suite: TestSuite) {
+        suite.expect(AgentAgyConversationReader.modelName(for: 326) == "gemini-3.8-flash",
+                     "code 326 maps to gemini-3.8-flash")
         suite.expect(AgentAgyConversationReader.modelName(for: 1298) == "gemini-3.7-flash-high",
                      "code 1298 maps to gemini-3.7-flash-high")
         suite.expect(AgentAgyConversationReader.modelName(for: 1318) == "gemini-3.8-flash-high",
                      "code 1318 maps to gemini-3.8-flash-high")
         suite.expect(AgentAgyConversationReader.modelName(for: 1319) == "gemini-3.8-flash-medium",
                      "code 1319 maps to gemini-3.8-flash-medium")
+        suite.expect(AgentAgyConversationReader.modelName(for: 1320) == "gemini-3.8-flash-low",
+                     "code 1320 maps to gemini-3.8-flash-low")
+        suite.expect(AgentAgyConversationReader.modelName(for: 1322) == "gemini-3.8-flash",
+                     "code 1322 maps to gemini-3.8-flash")
+        suite.expect(AgentAgyConversationReader.modelName(for: 1404) == "claude-sonnet-5-5",
+                     "code 1404 maps to claude-sonnet-5-5")
         suite.expect(AgentAgyConversationReader.modelName(for: 1417) == "gemini-4-argon-high",
                      "code 1417 maps to gemini-4-argon-high")
         suite.expect(AgentAgyConversationReader.modelName(for: 1419) == "gemini-4-argon-low",

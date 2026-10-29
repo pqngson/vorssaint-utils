@@ -497,6 +497,15 @@ enum AgentLogParser {
         if content.contains("Gemini 4 Argon") || content.contains("gemini-4-argon") {
             return "gemini-4-argon"
         }
+        if content.contains("Claude Sonnet 5.5") || content.contains("claude-sonnet-5") {
+            return "claude-sonnet-5-5"
+        }
+        if content.contains("Claude Opus 5.5") || content.contains("claude-opus-5") {
+            return "claude-opus-5-5"
+        }
+        if content.contains("Claude Haiku 5.5") || content.contains("claude-haiku-5") {
+            return "claude-haiku-5-5"
+        }
         if content.contains("Gemini 3.8 Flash") || content.contains("gemini-3.8-flash") {
             return "gemini-3.8-flash"
         }

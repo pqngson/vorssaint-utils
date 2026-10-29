@@ -103,7 +103,8 @@ enum NotchAgentTests {
                         && AgentPricing.price(for: "claude-opus-4-5-20251101")?.input == 5
                         && AgentPricing.price(for: "us.anthropic.claude-sonnet-4-5-20250929-v1:0")?.input == 3
                         && AgentPricing.price(for: "claude-haiku-4-5@20251001")?.output == 5
-                        && AgentPricing.price(for: "claude-sonnet-4-5[1m]")?.input == 3,
+                        && AgentPricing.price(for: "claude-sonnet-4-5[1m]")?.input == 3
+                        && AgentPricing.price(for: "Claude Sonnet 5.5 (Medium)")?.input == 2,
                      "snapshot dates, cloud prefixes and context tags keep the family's price")
         suite.expect(AgentPricing.price(for: "gpt-5.2-codex")?.input == 1.75 && AgentPricing.price(for: "gpt-5")?.input == 1.25
                         && AgentPricing.price(for: "gpt-6-astra")?.output == 50,
@@ -162,6 +163,7 @@ enum NotchAgentTests {
         suite.expect(AgentPricing.displayName("claude-opus-5-5") == "Opus 5.5"
                         && AgentPricing.displayName("claude-3-5-sonnet-20241022") == "Sonnet 3.5"
                         && AgentPricing.displayName("claude-sonnet-4-5-20250929") == "Sonnet 4.5"
+                        && AgentPricing.displayName("Claude Sonnet 5.5 (Medium)") == "Sonnet 5.5"
                         && AgentPricing.displayName("gpt-6-astra") == "GPT-6 Astra"
                         && AgentPricing.displayName("gpt-5.1-codex-max") == "GPT-5.1 Codex Max"
                         && AgentPricing.displayName("gpt-6-astra-2026-10-01") == "GPT-6 Astra"
@@ -726,9 +728,9 @@ enum NotchAgentTests {
         let claudeLogPath = "/Users/user/brain/.claude/projects/proj-1/session-abc.jsonl"
         suite.expect(AgentLogReader.isLog(claudeLogPath, in: claudeUnderBrain), "claude log below a path containing brain is not discarded")
 
-        // Root discovery includes CLI, desktop, and IDE Antigravity roots
+        // Root discovery includes CLI, desktop, IDE, and ACP Antigravity roots
         let antigravityRoots = AgentLogRoot.all().filter { $0.provider == .antigravity }
-        suite.expect(antigravityRoots.count == 3, "discovers all three Antigravity brain roots (desktop, IDE, and CLI)")
+        suite.expect(antigravityRoots.count == 4, "discovers all four Antigravity brain roots (desktop, IDE, CLI, and ACP)")
 
         // Mid-turn response opens turn if closed
         var midState = AgentLogState()

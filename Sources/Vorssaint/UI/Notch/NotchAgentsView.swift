@@ -502,8 +502,11 @@ private struct NotchAgentAgyLimitsCard: View {
         snapshot.limits[.agy]
     }
 
-    /// Muted only when the last load failed, not while a reading ages.
-    private var stale: Bool { failure != nil }
+    /// A reading from a while ago: still the latest known, shown quieter
+    /// until it is checked again.
+    private var stale: Bool {
+        NotchAgentSupport.limitsAreStale(limits, provider: .agy, account: false, now: now)
+    }
 
     private var windows: [AgentLimitWindow] {
         (limits?.windows ?? []).map { AgentLimitSupport.current($0, at: now) }

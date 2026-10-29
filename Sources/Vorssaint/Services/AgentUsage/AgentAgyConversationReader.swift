@@ -22,7 +22,8 @@ final class AgentAgyConversationReader {
         [
             home.appendingPathComponent(".gemini/antigravity-cli/conversations", isDirectory: true).path,
             home.appendingPathComponent(".gemini/antigravity/conversations", isDirectory: true).path,
-            home.appendingPathComponent(".gemini/antigravity-ide/conversations", isDirectory: true).path
+            home.appendingPathComponent(".gemini/antigravity-ide/conversations", isDirectory: true).path,
+            home.appendingPathComponent(".gemini/antigravity-acp/conversations", isDirectory: true).path
         ]
     }
 
@@ -308,10 +309,13 @@ final class AgentAgyConversationReader {
 
     static func modelName(for code: UInt64) -> String {
         switch code {
+        case 326, 1322: return "gemini-3.8-flash"
         case 1298: return "gemini-3.7-flash-high"
         case 1299: return "gemini-3.7-flash-medium"
         case 1318: return "gemini-3.8-flash-high"
         case 1319: return "gemini-3.8-flash-medium"
+        case 1320: return "gemini-3.8-flash-low"
+        case 1404: return "claude-sonnet-5-5"
         case 1417: return "gemini-4-argon-high"
         case 1418: return "gemini-4-argon-medium"
         case 1419: return "gemini-4-argon-low"

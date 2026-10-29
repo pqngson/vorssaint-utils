@@ -196,16 +196,16 @@ enum AgentPricing {
     /// model runs; the family name in the middle does not.
     static func normalized(_ model: String) -> String {
         var id = model.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if let range = id.range(of: "claude-") { id = String(id[range.lowerBound...]) }
-        // Copilot names Claude point releases with a dot where Anthropic's
-        // own logs and the public price list use a dash.
-        if id.hasPrefix("claude-") { id = id.replacingOccurrences(of: ".", with: "-") }
-        if let slash = id.lastIndex(of: "/") { id = String(id[id.index(after: slash)...]) }
         for marker in ["@", "[", "("] {
             if let index = id.firstIndex(of: Character(marker)) { id = String(id[..<index]) }
         }
         id = id.trimmingCharacters(in: .whitespacesAndNewlines)
         if id.contains(" ") { id = id.replacingOccurrences(of: " ", with: "-") }
+        if let range = id.range(of: "claude-") { id = String(id[range.lowerBound...]) }
+        if let slash = id.lastIndex(of: "/") { id = String(id[id.index(after: slash)...]) }
+        // Copilot names Claude point releases with a dot where Anthropic's
+        // own logs and the public price list use a dash.
+        if id.hasPrefix("claude-") { id = id.replacingOccurrences(of: ".", with: "-") }
         return id
     }
 

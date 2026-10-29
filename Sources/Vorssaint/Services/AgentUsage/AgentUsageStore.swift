@@ -644,7 +644,8 @@ struct AgentLogRoot: Equatable {
          (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
          (.agy, ".gemini/antigravity/brain"),
          (.agy, ".gemini/antigravity-ide/brain"),
-         (.agy, ".gemini/antigravity-cli/brain")].map { provider, path in
+         (.agy, ".gemini/antigravity-cli/brain"),
+         (.agy, ".gemini/antigravity-acp/brain")].map { provider, path in
             AgentLogRoot(provider: provider, url: canonical(FileManager.default.homeDirectoryForCurrentUser.appending(path: path, directoryHint: .isDirectory)))
         }
     }()
@@ -658,7 +659,8 @@ struct AgentLogRoot: Equatable {
          (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
          (.agy, ".gemini/antigravity/brain"),
          (.agy, ".gemini/antigravity-ide/brain"),
-         (.agy, ".gemini/antigravity-cli/brain")].map { provider, path in
+         (.agy, ".gemini/antigravity-cli/brain"),
+         (.agy, ".gemini/antigravity-acp/brain")].map { provider, path in
             AgentLogRoot(provider: provider, url: canonical(home.appending(path: path, directoryHint: .isDirectory)))
         }
     }
