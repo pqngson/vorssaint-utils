@@ -639,28 +639,27 @@ struct AgentLogRoot: Equatable {
     /// Canonical, because file events report real paths: a folder kept as a
     /// link elsewhere, as dotfile setups do, would otherwise never match.
     private static let cachedDefaultRoots: [AgentLogRoot] = {
-        [(AgentProvider.claude, ".claude/projects"), (.claude, ".config/claude/projects"),
-         (.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
-         (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
-         (.agy, ".gemini/antigravity/brain"),
-         (.agy, ".gemini/antigravity-ide/brain"),
-         (.agy, ".gemini/antigravity-cli/brain"),
-         (.agy, ".gemini/antigravity-acp/brain")].map { provider, path in
-            AgentLogRoot(provider: provider, url: canonical(FileManager.default.homeDirectoryForCurrentUser.appending(path: path, directoryHint: .isDirectory)))
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let claude = ClaudeAccountProfile().logURLs(home: home).map { AgentLogRoot(provider: .claude, url: canonical($0)) }
+        let others: [(AgentProvider, String)] = [(.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
+            (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
+            (.agy, ".gemini/antigravity/brain"), (.agy, ".gemini/antigravity-ide/brain"),
+            (.agy, ".gemini/antigravity-cli/brain"), (.agy, ".gemini/antigravity-acp/brain")]
+        return claude + others.map { provider, path in
+            AgentLogRoot(provider: provider, url: canonical(home.appending(path: path, directoryHint: .isDirectory)))
         }
     }()
 
-    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [AgentLogRoot] {
-        if home.path == FileManager.default.homeDirectoryForCurrentUser.path {
+    static func all(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                    claudeProfile: ClaudeAccountProfile = ClaudeAccountProfile()) -> [AgentLogRoot] {
+        if home.path == FileManager.default.homeDirectoryForCurrentUser.path && claudeProfile.isDefault {
             return cachedDefaultRoots
         }
-        return [(AgentProvider.claude, ".claude/projects"), (.claude, ".config/claude/projects"),
-         (.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
+        let claude = claudeProfile.logURLs(home: home).map { AgentLogRoot(provider: .claude, url: canonical($0)) }
+        return claude + [(AgentProvider.codex, ".codex/sessions"), (.codex, ".codex/archived_sessions"),
          (.opencode, ".local/share/opencode"), (.copilot, ".copilot/session-state"),
-         (.agy, ".gemini/antigravity/brain"),
-         (.agy, ".gemini/antigravity-ide/brain"),
-         (.agy, ".gemini/antigravity-cli/brain"),
-         (.agy, ".gemini/antigravity-acp/brain")].map { provider, path in
+         (.agy, ".gemini/antigravity/brain"), (.agy, ".gemini/antigravity-ide/brain"),
+         (.agy, ".gemini/antigravity-cli/brain"), (.agy, ".gemini/antigravity-acp/brain")].map { provider, path in
             AgentLogRoot(provider: provider, url: canonical(home.appending(path: path, directoryHint: .isDirectory)))
         }
     }
